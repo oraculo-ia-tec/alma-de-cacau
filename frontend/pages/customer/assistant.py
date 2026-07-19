@@ -1,4 +1,4 @@
-﻿"""
+"""
 Assistente Cacau - Landing Page da Alma de Cacau
 Com deteccao de produto e exibicao de imagem automatica
 """
@@ -180,7 +180,7 @@ def render():
 
     # Historico de mensagens com exibicao de imagens
     for msg in st.session_state.messages:
-        avatar = "ðŸ«" if msg["role"] == "assistant" else "ðŸ‘¤"
+        avatar = ":material/smart_toy:" if msg["role"] == "assistant" else ":material/person:"
         with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
             if msg["role"] == "assistant":
@@ -191,7 +191,7 @@ def render():
     if prompt := st.chat_input("Digite sua mensagem para a Cacau..."):
         _extract_lead(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("assistant", avatar="ðŸ«"):
+        with st.chat_message("assistant", avatar=":material/smart_toy:"):
             with st.spinner(""):
                 response = _call_groq()
             st.markdown(response)
