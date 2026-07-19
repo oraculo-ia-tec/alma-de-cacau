@@ -19,3 +19,4 @@ streamlit>=1.35.0
 # Utils
 uvicorn>=0.29.0
 python-multipart>=0.0.9
+streamlit-option-menu==0.4.0
