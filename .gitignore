@@ -1,0 +1,35 @@
+﻿# Ambiente virtual Python
+venv/
+.venv/
+env/
+
+# Segredos e variaveis locais
+.env
+.env.*
+!.env.example
+
+# Banco de dados local
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache e arquivos Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Streamlit local
+.streamlit/secrets.toml
+
+# Arquivos do sistema e IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Arquivos locais que nao devem ir ao repositorio
+pedido.py
+pedido_chat_asaas.py
+pedido_chat_mcp.py
+pedido_integrado.py
