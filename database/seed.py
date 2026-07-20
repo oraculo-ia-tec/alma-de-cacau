@@ -21,8 +21,8 @@ def run_seed():
     with get_db() as db:
         # --- Alergenos ---
         allergens_data = [
-            ("Gluten", "🌾"), ("Lactose", "🥛"), ("Amendoim", "🥜"),
-            ("Soja", "🫘"), ("Castanhas", "🌰"), ("Ovos", "🥚"),
+            ("Gluten", "\U0001F33E"), ("Lactose", "\U0001F95B"), ("Amendoim", "\U0001F95C"),
+            ("Soja", "\U0001FAD8"), ("Castanhas", "\U0001F330"), ("Ovos", "\U0001F95A"),
         ]
         allergens = {}
         for name, icon in allergens_data:
@@ -37,11 +37,13 @@ def run_seed():
         ingredients_data = [
             ("Chocolate Belga 70% Cacau", True),
             ("Chocolate Branco Premium", True),
-            ("Caramelo Artesanal", True),
-            ("Praline de Amendoim", True),
-            ("Maracuja Fresco", False),
-            ("Flor de Sal do Nordeste", False),
-            ("Avela Piemontesa", True),
+            ("Doce de Leite Artesanal", True),
+            ("Amendoim Torrado", False),
+            ("Castanha Selecionada", True),
+            ("Pistache Nobre", True),
+            ("Licor Amarula", True),
+            ("Cafe Torrado e Moido", False),
+            ("Pimenta Artesanal", False),
             ("Manteiga de Cacau", False),
         ]
         for name, is_premium in ingredients_data:
@@ -49,47 +51,63 @@ def run_seed():
                 db.add(Ingredient(name=name, is_premium=is_premium))
         db.flush()
 
-        # --- Sabores ---
+        # --- Sabores (os 7 sabores oficiais da Alma de Cacau) ---
         flavors_data = [
             {
-                "name": "Intenso 70%",
-                "tagline": "Alma pura do cacau",
-                "description": "Chocolate amargo de origem com 70% de cacau selecionado.",
-                "tasting_note": "Deixe derreter lentamente na lingua para sentir as notas de frutas vermelhas e castanha.",
-                "pairing_suggestion": "Harmoniza com cafe espresso ou vinho tinto encorpado.",
-                "emotional_context": "Para momentos de reflexao e introspeccao. Um presente para quem aprecia o genuino.",
+                "name": "Pimenta",
+                "tagline": "Equilibrio e intensidade",
+                "description": "O contraste perfeito entre o doce e o picante. Um sabor surpreendente, marcante e inconfundivel.",
+                "tasting_note": "Aprecie devagar, sentindo o calor suave e o sabor que permanece.",
+                "pairing_suggestion": "Harmoniza com cafe espresso ou destilados amadeirados.",
+                "emotional_context": "Para quem busca uma experiencia sensorial ousada e memoravel.",
             },
             {
-                "name": "Caramelo Flor de Sal",
-                "tagline": "O equilibrio perfeito",
-                "description": "Ganache aveludada de caramelo artesanal com toque de flor de sal do Nordeste.",
-                "tasting_note": "O contraste doce-salgado revela-se camada a camada.",
-                "pairing_suggestion": "Acompanha cha verde ou champagne brut.",
-                "emotional_context": "Para celebrar dualidades e conexoes especiais.",
+                "name": "Doce de Leite com Amendoim",
+                "tagline": "Pura nostalgia",
+                "description": "A uniao do doce de leite cremoso com a crocancia do amendoim. Um classico que abraca o coracao.",
+                "tasting_note": "Ideal com um cafe ou em um momento especial de pausa.",
+                "pairing_suggestion": "Acompanha bem cafe com leite ou chocolate quente.",
+                "emotional_context": "Para presentear com afeto e lembranca de infancia.",
             },
             {
-                "name": "Maracuja Tropical",
-                "tagline": "O Brasil em cada mordida",
-                "description": "Ganache de chocolate ao leite com polpa fresca de maracuja.",
-                "tasting_note": "Acidez vibrante que desperta os sentidos, finalizada em suavidade.",
-                "pairing_suggestion": "Perfeito com suco de frutas tropicais ou agua com gas.",
-                "emotional_context": "Para presentear com alegria e leveza.",
+                "name": "Castanha",
+                "tagline": "Sofisticacao e crocancia",
+                "description": "Recheio cremoso com pedacos selecionados de castanha. Sabor nobre, elegante e envolvente.",
+                "tasting_note": "Harmoniza perfeitamente com um bom vinho ou para ocasioes especiais.",
+                "pairing_suggestion": "Combina com vinho tinto encorpado ou porto.",
+                "emotional_context": "Para celebrar conquistas e momentos de requinte.",
             },
             {
-                "name": "Avela & Chocolate",
-                "tagline": "O classico reinventado",
-                "description": "Praline artesanal de avela piemontesa envolta em chocolate amargo.",
-                "tasting_note": "Crocante por fora, cremoso por dentro. Um abraco em forma de bombom.",
-                "pairing_suggestion": "Excelente com cappuccino ou leite quente.",
-                "emotional_context": "Para momentos de conforto e nostalgia afetiva.",
+                "name": "Chocolate Branco",
+                "tagline": "Delicadeza em cada mordida",
+                "description": "Cremoso, suave e irresistivel. Um sabor que derrete na boca e conquista para sempre.",
+                "tasting_note": "Aprecie com calma, para sentir toda a sua suavidade.",
+                "pairing_suggestion": "Acompanha cha branco ou espumante doce.",
+                "emotional_context": "Para presentes delicados e declaracoes afetuosas.",
             },
             {
-                "name": "Chocolate Branco & Framboesa",
-                "tagline": "Elegancia e frescor",
-                "description": "Ganache de chocolate branco belga com compota de framboesa.",
-                "tasting_note": "Doce e floral com acidez delicada da framboesa.",
-                "pairing_suggestion": "Harmoniza com rose espumante ou cha de hibisco.",
-                "emotional_context": "Para celebrar feminilidade, aniversarios e primeiros presentes.",
+                "name": "Pistache",
+                "tagline": "Refinado e unico",
+                "description": "Sabor nobre, cremoso e levemente amanteigado. Uma experiencia que encanta os sentidos.",
+                "tasting_note": "Deguste lentamente, para sentir o sabor rico do verdadeiro pistache.",
+                "pairing_suggestion": "Harmoniza com cha verde ou champagne brut.",
+                "emotional_context": "Para quem aprecia sofisticacao em cada detalhe.",
+            },
+            {
+                "name": "Amarula",
+                "tagline": "Cremosidade e charme",
+                "description": "Recheio cremoso com o toque suave e marcante do licor Amarula. Um sabor sofisticado e exotico.",
+                "tasting_note": "Sirva geladinho, e deixe que o licor revele todo o encanto.",
+                "pairing_suggestion": "Perfeito puro ou com um digestivo cremoso.",
+                "emotional_context": "Para momentos de celebracao e indulgencia.",
+            },
+            {
+                "name": "Cafe",
+                "tagline": "Energia e sabor",
+                "description": "Recheio intenso que desperta os sentidos. O sabor do cafe em uma mordida perfeita.",
+                "tasting_note": "O companheiro ideal para o seu cafe da manha ou da tarde.",
+                "pairing_suggestion": "Acompanha cappuccino ou leite quente.",
+                "emotional_context": "Para quem precisa de um empurrao de energia com elegancia.",
             },
         ]
         flavors = {}
@@ -111,43 +129,71 @@ def run_seed():
                 db.add(ProductCategory(name=name, display_order=order))
         db.flush()
 
-        cat_classicos = db.query(ProductCategory).filter_by(name="Bombons Classicos").first()
         cat_trufas = db.query(ProductCategory).filter_by(name="Trufas Especiais").first()
+        cat_presente = db.query(ProductCategory).filter_by(name="Colecao Presente").first()
 
-        # --- Produtos ---
+        # --- Produtos (nomes IDENTICOS aos "label" do _PRODUCT_MAP em assistant.py) ---
         products_data = [
             {
-                "sku": "ADC-001", "name": "Bombom Intenso 70%",
-                "description": "Bombom artesanal de chocolate amargo 70% cacau, moldado a mao.",
-                "price": Decimal("8.50"), "unit_label": "unidade", "weight_grams": 25,
+                "sku": "ADC-PIM", "name": "Trufa de Pimenta",
+                "description": "O contraste perfeito entre o doce e o picante.",
+                "price": Decimal("10.50"), "unit_label": "unidade", "weight_grams": 25,
+                "available_quantity": 50, "is_featured": True, "is_best_seller": False,
+                "flavor_name": "Pimenta", "category": cat_trufas,
+            },
+            {
+                "sku": "ADC-DLA", "name": "Trufa Doce de Leite com Amendoim",
+                "description": "Doce de leite cremoso com crocancia do amendoim.",
+                "price": Decimal("9.90"), "unit_label": "unidade", "weight_grams": 25,
                 "available_quantity": 50, "is_featured": True, "is_best_seller": True,
-                "flavor_name": "Intenso 70%", "category": cat_classicos,
+                "flavor_name": "Doce de Leite com Amendoim", "category": cat_trufas,
             },
             {
-                "sku": "ADC-002", "name": "Trufa Caramelo Flor de Sal",
-                "description": "Trufa de caramelo artesanal com flor de sal, envolta em chocolate 70%.",
-                "price": Decimal("9.90"), "unit_label": "unidade", "weight_grams": 30,
-                "available_quantity": 35, "is_featured": True, "is_best_seller": True,
-                "flavor_name": "Caramelo Flor de Sal", "category": cat_trufas,
+                "sku": "ADC-CAS", "name": "Trufa de Castanha",
+                "description": "Recheio cremoso com pedacos selecionados de castanha.",
+                "price": Decimal("9.50"), "unit_label": "unidade", "weight_grams": 25,
+                "available_quantity": 50, "is_featured": False, "is_best_seller": False,
+                "flavor_name": "Castanha", "category": cat_trufas,
             },
             {
-                "sku": "ADC-003", "name": "Bombom Maracuja Tropical",
-                "description": "Ganache de maracuja fresco em casca de chocolate ao leite.",
+                "sku": "ADC-CBR", "name": "Trufa de Chocolate Branco",
+                "description": "Cremoso, suave e irresistivel.",
+                "price": Decimal("9.50"), "unit_label": "unidade", "weight_grams": 25,
+                "available_quantity": 50, "is_featured": False, "is_best_seller": False,
+                "flavor_name": "Chocolate Branco", "category": cat_trufas,
+            },
+            {
+                "sku": "ADC-PIS", "name": "Trufa de Pistache",
+                "description": "Sabor nobre, cremoso e levemente amanteigado.",
+                "price": Decimal("10.50"), "unit_label": "unidade", "weight_grams": 25,
+                "available_quantity": 50, "is_featured": True, "is_best_seller": True,
+                "flavor_name": "Pistache", "category": cat_trufas,
+            },
+            {
+                "sku": "ADC-AMA", "name": "Trufa de Amarula",
+                "description": "Toque suave e marcante do licor Amarula.",
+                "price": Decimal("9.90"), "unit_label": "unidade", "weight_grams": 25,
+                "available_quantity": 50, "is_featured": False, "is_best_seller": False,
+                "flavor_name": "Amarula", "category": cat_trufas,
+            },
+            {
+                "sku": "ADC-CAF", "name": "Trufa de Cafe",
+                "description": "Recheio intenso que desperta os sentidos.",
                 "price": Decimal("8.90"), "unit_label": "unidade", "weight_grams": 25,
-                "available_quantity": 40, "is_featured": False,
-                "flavor_name": "Maracuja Tropical", "category": cat_classicos,
+                "available_quantity": 50, "is_featured": False, "is_best_seller": False,
+                "flavor_name": "Cafe", "category": cat_trufas,
             },
             {
-                "sku": "ADC-BOX9", "name": "Caixa Degustacao 9 Bombons",
-                "description": "Selecao de 9 bombons artesanais nos sabores mais amados da casa.",
+                "sku": "ADC-BOX9", "name": "Caixa Degustacao 9 Trufas",
+                "description": "Selecao de 9 trufas artesanais nos sabores mais amados da casa.",
                 "price": Decimal("69.90"), "unit_label": "caixa de 9", "weight_grams": 250,
                 "available_quantity": 20, "is_featured": True, "is_best_seller": True,
-                "flavor_name": None, "category": cat_classicos,
+                "flavor_name": None, "category": cat_presente,
             },
         ]
         for pd in products_data:
             if not db.query(Product).filter_by(sku=pd["sku"]).first():
-                flavor = flavors.get(pd.pop("flavor_name")) if pd["flavor_name"] else None
+                flavor = flavors.get(pd.pop("flavor_name")) if pd.get("flavor_name") else None
                 category = pd.pop("category")
                 product = Product(
                     flavor_id=flavor.id if flavor else None,
@@ -164,8 +210,13 @@ def run_seed():
         inventory_data = [
             ("Chocolate Belga 70%", "kg", Decimal("10.0"), Decimal("2.0"), Decimal("45.00")),
             ("Chocolate Branco Premium", "kg", Decimal("5.0"), Decimal("1.0"), Decimal("52.00")),
-            ("Caramelo Artesanal", "kg", Decimal("3.0"), Decimal("0.5"), Decimal("28.00")),
-            ("Flor de Sal", "g", Decimal("500.0"), Decimal("100.0"), Decimal("0.05")),
+            ("Doce de Leite Artesanal", "kg", Decimal("4.0"), Decimal("1.0"), Decimal("22.00")),
+            ("Amendoim Torrado", "kg", Decimal("3.0"), Decimal("0.5"), Decimal("18.00")),
+            ("Castanha Selecionada", "kg", Decimal("2.0"), Decimal("0.5"), Decimal("60.00")),
+            ("Pistache Nobre", "kg", Decimal("1.5"), Decimal("0.3"), Decimal("90.00")),
+            ("Licor Amarula", "l", Decimal("2.0"), Decimal("0.5"), Decimal("55.00")),
+            ("Cafe Torrado e Moido", "kg", Decimal("2.0"), Decimal("0.5"), Decimal("35.00")),
+            ("Pimenta Artesanal", "g", Decimal("300.0"), Decimal("50.0"), Decimal("0.15")),
             ("Embalagens Standard", "un", Decimal("200.0"), Decimal("50.0"), Decimal("0.80")),
         ]
         for name, unit, qty, min_qty, cost in inventory_data:
