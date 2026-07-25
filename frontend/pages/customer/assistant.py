@@ -81,10 +81,11 @@ from schemas.customer import CreateCustomerInput, AddressInput
 from schemas.order import CreateOrderInput, OrderItemInput
 from schemas.payment import CreatePaymentInput
 from adapters.asaas_adapter import create_customer as asaas_create_customer
+from skills.cacau_videos import show_welcome_video, show_payment_confirmed_video, payment_is_approved
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-_LOGO_PATH = Path(__file__).parents[3] / "logomarca.jpg"
+_LOGO_PATH = Path(__file__).resolve().parents[3] / "cacau" / "img" / "cacau-image.png"
 _PRODUCTS_DIR = Path(__file__).parents[3] / "produtos"
 
 _PRODUCT_MAP = {
@@ -135,8 +136,8 @@ _ASSISTANT_CSS = """
 .cacau-hero { text-align: center; padding: 18px 0 8px 0; }
 .cacau-logo-wrap { display: flex; justify-content: center; margin-bottom: 10px; }
 .cacau-logo-wrap img {
-    width: 96px; height: 96px; border-radius: 50%; object-fit: cover;
-    border: 3px solid #F2A93B; animation: cacau-pulse 2.2s infinite;
+    width: 200px; height: 200px; border-radius: 50%; object-fit: cover;
+    border: 4px solid #F2A93B; animation: cacau-pulse 2.2s infinite;
 }
 @keyframes cacau-pulse {
     0%   { box-shadow: 0 0 0 0 rgba(232, 97, 60, 0.55); transform: scale(1); }
@@ -158,6 +159,28 @@ _ASSISTANT_CSS = """
     background: #FFF3E4; border-radius: 14px; padding: 6px 10px;
     border: 1px solid rgba(232, 97, 60, 0.15);
 }
+section[data-testid="stBottom"] > div {
+    background: linear-gradient(180deg, transparent, #FFF3E4 70%);
+    padding-top: 8px;
+}
+[data-testid="stChatInput"] {
+    border: 2px solid #F2A93B !important;
+    border-radius: 24px !important;
+    background: #FFFAF4 !important;
+    box-shadow: 0 4px 18px rgba(232, 97, 60, 0.13) !important;
+}
+[data-testid="stChatInput"] textarea {
+    font-size: 0.96rem !important;
+    color: #3D2210 !important;
+    background: transparent !important;
+}
+[data-testid="stChatInput"] textarea::placeholder {
+    color: #C49A6C !important;
+    font-style: italic;
+}
+[data-testid="stChatInput"] button svg {
+    fill: #E8613C !important;
+}
 </style>
 """
 
@@ -168,7 +191,21 @@ _ASSISTANT_CSS = """
 def _logo_html() -> str:
     if _LOGO_PATH.exists():
         data = base64.b64encode(_LOGO_PATH.read_bytes()).decode()
-        return f'<img src="data:image/jpeg;base64,{data}">'
+        return f'<img src="data:image/png;base64,{data}">'  
+    return "\U0001F36B"
+
+
+@st.cache_resource(show_spinner=False)
+def _get_cacau_avatar():
+    """Retorna imagem PIL da Cacau para uso como avatar no chat."""
+    try:
+        from PIL import Image as _PILImage
+        if _LOGO_PATH.exists():
+            img = _PILImage.open(str(_LOGO_PATH))
+            img.load()
+            return img
+    except Exception:
+        pass
     return "\U0001F36B"
 
 
@@ -384,7 +421,7 @@ def _register_order_and_payment() -> dict:
         if err:
             raise RuntimeError(err)
 
-        pix_data, err = payment_service.get_pix_qr_code(payment.id)
+        pix_data, pix_err = payment_service.get_pix_qr_code(payment.id)
 
         notif = NotificationService(db)
         notif.notify_order_confirmation(
@@ -399,11 +436,12 @@ def _register_order_and_payment() -> dict:
             "payment_id": payment.id,
             "total": float(order.total),
             "pix": pix_data or {},
+            "pix_error": pix_err or "",
         }
 
 
 def _render_payment_block():
-    st.chat_message("assistant", avatar=":material/smart_toy:").markdown(
+    st.chat_message("assistant", avatar=_get_cacau_avatar()).markdown(
         "Perfeito! Para gerar o pagamento PIX, preciso confirmar seus dados de entrega \U0001F4E6"
     )
     with st.container(border=True):
@@ -456,13 +494,42 @@ def _render_payment_block():
 
         result = st.session_state.get("db_payment_result")
         if result:
-            st.markdown(f"### Pedido {result['order_number']} criado!")
+            st.success(f"\u2705 Pedido **{result['order_number']}** criado com sucesso!")
             st.caption(f"Total: R$ {result['total']:.2f}".replace(".", ","))
+
             pix = result.get("pix") or {}
-            if pix.get("payload"):
-                st.code(pix["payload"], language="text")
-            if pix.get("encodedImage"):
-                st.image(f"data:image/png;base64,{pix['encodedImage']}")
+            payload = pix.get("payload") or pix.get("Payload") or ""
+            encoded = pix.get("encodedImage") or pix.get("EncodedImage") or ""
+
+            if payload or encoded:
+                st.markdown("#### \U0001F4B8 Pague via PIX")
+                col_qr, col_link = st.columns([1, 1])
+                with col_qr:
+                    if encoded:
+                        st.image(
+                            f"data:image/png;base64,{encoded}",
+                            caption="Aponte a camera do seu banco",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.info("QR Code nao disponivel")
+                with col_link:
+                    st.markdown("**\U0001F4CB Chave PIX (copia e cola):**")
+                    if payload:
+                        st.code(payload, language="text")
+                        st.caption("Cole este codigo no app do seu banco para pagar.")
+                    else:
+                        st.warning("Chave PIX nao retornada pela API.")
+            else:
+                pix_err = result.get("pix_error", "")
+                if pix_err:
+                    st.error(f"Erro ao gerar QR Code PIX: {pix_err}")
+                else:
+                    st.warning("QR Code PIX nao retornado. Verifique a integracao com o Asaas.")
+                st.caption(f"Referencia do pagamento: {result.get('payment_id', '')}")
+
+            if payment_is_approved(payment_id=result["payment_id"]):
+                show_payment_confirmed_video()
     st.stop()
 
 
@@ -519,9 +586,24 @@ def _render_quantity_selector(flavor_key: str, flavor_info: dict):
                 st.rerun()
 
 
+_BUY_KEYWORDS = {"quero", "vou", "levar", "comprar", "pode", "fechar", "fechou", "sim", "escolhi", "manda", "queria", "pedido"}
+
+
 def _maybe_stop_for_purchase(prompt: str):
     intent = _classify_intent(prompt)
     st.session_state.last_intent = intent
+
+    # Fallback por palavras-chave caso a LLM nao detecte corretamente
+    if not (intent.get("intencao_compra") and intent.get("sabor")):
+        prompt_lower = prompt.lower()
+        has_buy = any(kw in prompt_lower for kw in _BUY_KEYWORDS)
+        if has_buy:
+            for key in _PRODUCT_MAP:
+                if key in prompt_lower:
+                    intent["intencao_compra"] = True
+                    intent["sabor"] = key
+                    break
+
     if intent.get("intencao_compra") and intent.get("sabor"):
         flavor_key = str(intent["sabor"]).lower().strip()
         flavor_info = _PRODUCT_MAP.get(flavor_key)
@@ -539,7 +621,7 @@ def _render_pending_quantity_block():
     if not flavor_key or not flavor_info:
         st.session_state.awaiting_quantity = False
         return
-    st.chat_message("assistant", avatar=":material/smart_toy:").markdown(
+    st.chat_message("assistant", avatar=_get_cacau_avatar()).markdown(
         f"Otima escolha! Vamos definir a quantidade da sua **{flavor_info.get('label', '')}** \U0001F447"
     )
     _render_quantity_selector(flavor_key, flavor_info)
@@ -559,6 +641,7 @@ def _init_session_state():
         "order_confirmed": None, "last_intent": None,
         "customer_profile_id": None, "asaas_customer_id": None,
         "db_payment_result": None, "db_payment_error": "",
+        "welcome_video_shown": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -582,11 +665,13 @@ def _render_body():
     st.markdown(_hero_header_html(), unsafe_allow_html=True)
 
     if not st.session_state.chat_started:
+        
         st.session_state.messages.append({"role": "assistant", "content": _WELCOME})
         st.session_state.chat_started = True
 
     for message in st.session_state.messages:
-        avatar = ":material/smart_toy:" if message["role"] == "assistant" else ":material/person:"
+        _cacau_av = _get_cacau_avatar()
+        avatar = _cacau_av if message["role"] == "assistant" else ":material/person:"
         with st.chat_message(message["role"], avatar=avatar):
             st.markdown(message["content"])
         if message["role"] == "assistant" and not st.session_state.get("awaiting_quantity"):
@@ -618,7 +703,7 @@ def _render_body():
             with st.spinner("Cacau esta preparando uma sugestao para voce..."):
                 response = _call_groq()
 
-        with st.chat_message("assistant", avatar=":material/smart_toy:"):
+        with st.chat_message("assistant", avatar=_get_cacau_avatar()):
             st.markdown(response)
         if not st.session_state.get("awaiting_quantity"):
             _show_product_images(_detect_products(response))

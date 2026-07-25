@@ -55,6 +55,7 @@ class PaymentService:
             provider_status=provider_status,
         )
         self.db.add(payment)
+        self.db.flush()  # popula payment.id antes de consultar o QR Code
         return payment, None
 
     def get_pix_qr_code(self, payment_id: int) -> Tuple[Optional[dict], Optional[str]]:
