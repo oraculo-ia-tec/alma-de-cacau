@@ -292,33 +292,42 @@ def _render_quantity_widget() -> None:
 
     fm = _get_flow_manager()
     with st.container(border=True):
-        img_path = _PRODUCTS_DIR / flavor_info.get("file", "")
-        if img_path.exists():
-            st.image(str(img_path), caption=flavor_info["label"], width=220)
+        col_produto, col_widget = st.columns([1, 1], gap="large")
 
-        st.markdown(f"**{flavor_info['label']}** — {flavor_info['price_str']}")
-        st.caption(f"✨ {flavor_info['experiencia']}")
-        st.write(flavor_info["descricao"])
-        st.info(f"🍫 **Como degustar:** {flavor_info['degustacao']}")
+        # ── Coluna esquerda: informações do produto ──
+        with col_produto:
+            img_path = _PRODUCTS_DIR / flavor_info.get("file", "")
+            if img_path.exists():
+                st.image(str(img_path), caption=flavor_info["label"], use_container_width=True)
 
-        # Usa a key do widget diretamente no session_state (evita conflito value/key)
-        qty_key = f"qty_{flavor_key}"
-        if qty_key not in st.session_state:
-            st.session_state[qty_key] = 1
+            st.markdown(f"**{flavor_info['label']}** — {flavor_info['price_str']}")
+            st.caption(f"✨ {flavor_info['experiencia']}")
+            st.write(flavor_info["descricao"])
+            st.info(f"🍫 **Como degustar:** {flavor_info['degustacao']}")
 
-        qty = st.number_input(
-            "Quantidade",
-            min_value=1,
-            max_value=50,
-            step=1,
-            key=qty_key,  # Streamlit gerencia o valor via session_state[qty_key]
-        )
+        # ── Coluna direita: seleção de quantidade ──
+        with col_widget:
+            st.markdown("#### Quantidade")
 
-        subtotal = round(flavor_info["price"] * qty, 2)
-        st.caption(f"Subtotal: **R$ {subtotal:.2f}**".replace(".", ","))
+            # Usa a key do widget diretamente no session_state (evita conflito value/key)
+            qty_key = f"qty_{flavor_key}"
+            if qty_key not in st.session_state:
+                st.session_state[qty_key] = 1
 
-        col_add, col_back = st.columns(2)
-        with col_add:
+            qty = st.number_input(
+                "Quantidade",
+                min_value=1,
+                max_value=50,
+                step=1,
+                key=qty_key,
+                label_visibility="collapsed",
+            )
+
+            subtotal = round(flavor_info["price"] * qty, 2)
+            st.markdown(f"**Subtotal:** R$ {subtotal:.2f}".replace(".", ","))
+
+            st.divider()
+
             if st.button("✅ Adicionar ao pedido", key=f"add_{flavor_key}", use_container_width=True):
                 fm.add_to_cart(flavor_key, flavor_info, qty)
                 # Limpa estado do widget para próxima seleção
@@ -336,7 +345,7 @@ def _render_quantity_widget() -> None:
                     ).replace(".", ",", 1),
                 })
                 st.rerun()
-        with col_back:
+
             if st.button("↩️ Voltar ao chat", key=f"back_{flavor_key}", use_container_width=True):
                 # Limpa estado do widget
                 if qty_key in st.session_state:
