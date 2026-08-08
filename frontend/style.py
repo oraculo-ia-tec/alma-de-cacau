@@ -155,7 +155,7 @@ p  { color: var(--tx-secondary); line-height: 1.7; }
 /* ── BOTÕES (área principal) ──────────────────────── */
 .main .stButton > button {
   background: linear-gradient(135deg, var(--c-chocolate) 0%, var(--c-gold) 100%) !important;
-  color: #fef8f0 !important;
+  color: #ffffff !important;
   border: none !important;
   border-radius: var(--r-md) !important;
   font-family: 'Lato', sans-serif !important;
@@ -164,6 +164,13 @@ p  { color: var(--tx-secondary); line-height: 1.7; }
   padding: 0.55rem 1.4rem !important;
   transition: all var(--tr-base) !important;
   box-shadow: var(--sh-sm) !important;
+}
+.main .stButton > button * {
+  color: #ffffff !important;
+}
+.main .stButton > button p,
+.main .stButton > button span {
+  color: #ffffff !important;
 }
 .main .stButton > button:hover {
   box-shadow: var(--sh-md) !important;
