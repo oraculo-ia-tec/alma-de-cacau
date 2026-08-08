@@ -1,134 +1,98 @@
 """
-Assistente Cacau - Alma de Cacau
-Chat guiado: nome -> sabor -> quantidade -> dados de entrega -> pagamento PIX (Asaas real)
-Integracao direta com banco (SQLAlchemy) via services/ existentes do projeto.
+Assistente Cacau — Alma de Cacau
+Fluxo conversacional com máquina de estados guiada.
+Fluxo completo: saudação → sabor → quantidade → adicional →
+confirmação → LGPD → nome → endereço → CPF → PIX → polling → entrega.
+
+Baseado em FLUXO_CONVERSACIONAL.md (adaptado para chocolates artesanais Alma de Cacau).
 """
+from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import traceback
 import uuid
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 from groq import Groq
 
 import config
+from services.flow_manager import CacauFlowManager, PRODUCT_MAP
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CONSTANTES DE CAMINHOS
+# ──────────────────────────────────────────────────────────────────────────────
+
+_ROOT         = Path(__file__).resolve().parents[3]
+_LOGO_PATH    = _ROOT / "cacau" / "img" / "cacau-image.png"
+_PRODUCTS_DIR = _ROOT / "produtos"
+_VIDEOS_DIR   = _ROOT / "cacau" / "videos"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SYSTEM PROMPTS
+# ──────────────────────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """
-Voce e a Cacau, assistente virtual da Alma de Cacau, marca premium de trufas e bombons artesanais feitos a mao.
-Slogan da marca: "Pequenos pedacos de felicidade... transformando chocolate em lembranca."
+Você é a Cacau, assistente virtual da Alma de Cacau, marca premium de trufas e bombons artesanais feitos à mão.
+Slogan da marca: "Pequenos pedaços de felicidade... transformando chocolate em lembrança."
 
-CONTEXTO FIXO:
-- Todo visitante que chega a este chat deseja comprar bombons artesanais.
-- O nome do cliente ja foi coletado antes da sua resposta.
-- A primeira pergunta apos saber o nome e sempre sobre preferencia de sabor.
+CONTEXTO:
+- Todo visitante neste chat deseja comprar bombons artesanais.
+- O nome do cliente já foi coletado antes da sua resposta.
+- Após saber o nome, pergunte sobre preferência de sabor.
 - A marca trabalha com exatamente 7 sabores. Nunca cite sabores fora desta lista.
 
-FLUXO OBRIGATORIO:
-1. Se o cliente acabou de informar o nome, trate-o amigavelmente pelo nome uma unica vez e pergunte: "Voce ja tem algum sabor em mente ou prefere que eu apresente os sabores disponiveis?"
-2. Nao pergunte sobre presente, evento, ocasiao ou data especial antes de o cliente mencionar esse assunto.
-3. Se o cliente quiser conhecer os sabores, apresente as opcoes de modo breve, organizado e com os respectivos precos.
-4. Depois de identificar os sabores, ajude com quantidade, caixa, embalagem e, quando apropriado, retirada ou entrega.
-5. Pergunte sobre alergias somente quando houver recomendacao ou compra que envolva amendoim, castanha ou laticinios.
-6. Nao peca o nome novamente e nao repita o nome em toda resposta.
-7. Faca no maximo uma pergunta por resposta.
-8. Nao invente produtos, precos, promocoes, estoque ou prazos.
+FLUXO OBRIGATÓRIO:
+1. Se o cliente acabou de informar o nome, trate-o amigavelmente pelo nome UMA ÚNICA VEZ e pergunte:
+   "Você já tem algum sabor em mente ou prefere que eu apresente os sabores disponíveis?"
+2. Não pergunte sobre presente ou ocasião antes de o cliente mencionar esse assunto.
+3. Se o cliente quiser conhecer os sabores, apresente as opções com preços de forma breve e organizada.
+4. Depois de identificar o sabor, ajude com quantidade e embalagem.
+5. Pergunte sobre alergias somente quando a escolha envolver amendoim, castanha ou laticínios.
+6. Não peça o nome novamente. Não repita o nome em toda resposta.
+7. Faça NO MÁXIMO uma pergunta por resposta.
+8. Não invente produtos, preços, promoções, estoque ou prazos.
 
-CATALOGO OFICIAL - Trufas artesanais por unidade (os unicos 7 sabores existentes):
-- Trufa de Pimenta - R$ 10,50 | equilibrio e intensidade.
-- Trufa Doce de Leite com Amendoim - R$ 9,90 | pura nostalgia.
-- Trufa de Castanha - R$ 9,50 | sofisticacao e crocancia.
-- Trufa de Chocolate Branco - R$ 9,50 | delicadeza em cada mordida.
-- Trufa de Pistache - R$ 10,50 | refinado e unico.
-- Trufa de Amarula - R$ 9,90 | cremosidade e charme.
-- Trufa de Cafe - R$ 8,90 | energia e sabor.
+CATÁLOGO OFICIAL (os únicos 7 sabores existentes):
+- Trufa de Pimenta — R$ 10,50 | equilíbrio e intensidade
+- Trufa Doce de Leite com Amendoim — R$ 9,90 | pura nostalgia
+- Trufa de Castanha — R$ 9,50 | sofisticação e crocância
+- Trufa de Chocolate Branco — R$ 9,50 | delicadeza em cada mordida
+- Trufa de Pistache — R$ 10,50 | refinado e único
+- Trufa de Amarula — R$ 9,90 | cremosidade e charme
+- Trufa de Cafe — R$ 8,90 | energia e sabor
 
 Caixas e embalagens:
-- Caixa Degustacao, 9 unidades - R$ 69,90 | mix a escolha.
-- Embalagem Standard - R$ 5,00.
-- Embalagem Premium - R$ 12,00.
-- Embalagem Luxury - R$ 25,00.
+- Caixa Degustação (9 unidades) — R$ 69,90 | mix à escolha
+- Embalagem Standard — R$ 5,00
+- Embalagem Premium — R$ 12,00
+- Embalagem Luxury — R$ 25,00
 
 REGRAS:
-- Use exatamente os nomes dos 7 produtos do catalogo ao recomenda-los, nunca crie sabores novos.
-- Tom: acolhedor, elegante, breve, natural e voltado a venda.
-- Ao mencionar um sabor, descreva a experiencia sensorial e, quando fizer sentido, a dica de degustacao.
+- Use exatamente os nomes dos 7 produtos ao recomendá-los.
+- Tom: acolhedor, elegante, breve, natural e voltado à venda.
+- Ao mencionar um sabor, descreva a experiência sensorial.
 """
 
-_INTENT_SYSTEM_PROMPT = """
-Voce e um classificador de intencao de compra para um chat de vendas de bombons artesanais.
-Analise a ULTIMA mensagem do cliente e responda APENAS com um JSON valido, sem texto extra, no formato:
-{"intencao_compra": true|false, "sabor": "chave_do_sabor_ou_null", "quer_conhecer_sabores": true|false, "ja_conhece_marca": true|false}
+_INTENT_PROMPT = """
+Você é um classificador de intenção para um chat de vendas de bombons artesanais.
+Analise a ÚLTIMA mensagem do cliente e responda APENAS com JSON válido, sem texto extra:
+{"intencao_compra": true|false, "sabor": "chave_ou_null", "quer_conhecer_sabores": true|false}
 
-Regras:
-- "intencao_compra" e true somente se o cliente demonstrar decisao final de compra (ex: "quero esse", "vou levar", "pode fechar", "vou de pistache").
-- "sabor" deve ser uma das chaves exatas: pimenta, "doce de leite", amendoim, castanha, "chocolate branco", pistache, amarula, cafe. Use null se nao houver sabor identificavel.
-- "quer_conhecer_sabores" e true se o cliente pedir para ver as opcoes, sem ainda ter decidido.
-- "ja_conhece_marca" e true se o cliente indicar que ja conhece a Alma de Cacau ou ja comprou antes.
-- Nunca inclua explicacoes, apenas o JSON.
+Chaves de sabor válidas: "pimenta", "doce de leite", "castanha", "chocolate branco",
+                         "pistache", "amarula", "cafe"
+- "intencao_compra": true se cliente demonstrar decisão de compra ("vou de pistache", "quero esse").
+- "sabor": chave exata detectada, ou null se nenhum.
+- "quer_conhecer_sabores": true se pedir para ver opções sem ter decidido.
+Nunca inclua explicações. Apenas o JSON.
 """
 
-from database.engine import get_db
-from database.models import Product, PaymentMethod, DeliveryType
-from services.customer_service import CustomerService
-from services.order_service import OrderService
-from services.payment_service import PaymentService
-from services.notification_service import NotificationService
-from schemas.customer import CreateCustomerInput, AddressInput
-from schemas.order import CreateOrderInput, OrderItemInput
-from schemas.payment import CreatePaymentInput
-from adapters.asaas_adapter import create_customer as asaas_create_customer
-from skills.cacau_videos import show_welcome_video, show_payment_confirmed_video, payment_is_approved
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-_LOGO_PATH = Path(__file__).resolve().parents[3] / "cacau" / "img" / "cacau-image.png"
-_PRODUCTS_DIR = Path(__file__).parents[3] / "produtos"
-
-_PRODUCT_MAP = {
-    "pimenta": {"file": "pimenta.png", "label": "Trufa de Pimenta", "price": "R$ 10,50",
-                "experiencia": "equilibrio e intensidade",
-                "descricao": "O contraste perfeito entre o doce e o picante.",
-                "degustacao": "Aprecie devagar, sentindo o calor suave."},
-    "doce de leite": {"file": "doce-de-leite-com-amendoim.png", "label": "Trufa Doce de Leite com Amendoim",
-                       "price": "R$ 9,90", "experiencia": "pura nostalgia",
-                       "descricao": "Doce de leite cremoso com crocancia do amendoim.",
-                       "degustacao": "Ideal com um cafe."},
-    "amendoim": {"file": "doce-de-leite-com-amendoim.png", "label": "Trufa Doce de Leite com Amendoim",
-                 "price": "R$ 9,90", "experiencia": "pura nostalgia",
-                 "descricao": "Doce de leite cremoso com crocancia do amendoim.",
-                 "degustacao": "Ideal com um cafe."},
-    "castanha": {"file": "castanha.png", "label": "Trufa de Castanha", "price": "R$ 9,50",
-                 "experiencia": "sofisticacao e crocancia",
-                 "descricao": "Recheio cremoso com pedacos selecionados de castanha.",
-                 "degustacao": "Harmoniza com um bom vinho."},
-    "chocolate branco": {"file": "chocolate-branco.png", "label": "Trufa de Chocolate Branco", "price": "R$ 9,50",
-                          "experiencia": "delicadeza em cada mordida",
-                          "descricao": "Cremoso, suave e irresistivel.",
-                          "degustacao": "Aprecie com calma."},
-    "pistache": {"file": "pistache.png", "label": "Trufa de Pistache", "price": "R$ 10,50",
-                 "experiencia": "refinado e unico",
-                 "descricao": "Sabor nobre, cremoso e levemente amanteigado.",
-                 "degustacao": "Deguste lentamente."},
-    "amarula": {"file": "amarula.png", "label": "Trufa de Amarula", "price": "R$ 9,90",
-                "experiencia": "cremosidade e charme",
-                "descricao": "Toque suave e marcante do licor Amarula.",
-                "degustacao": "Sirva geladinho."},
-    "cafe": {"file": "cafe.png", "label": "Trufa de Cafe", "price": "R$ 8,90",
-             "experiencia": "energia e sabor",
-             "descricao": "Recheio intenso que desperta os sentidos.",
-             "degustacao": "Companheiro ideal para o cafe da manha."},
-}
-_PRODUCT_MAP["café"] = _PRODUCT_MAP["cafe"]
-
-_WELCOME = (
-    "Ola! Seja muito bem-vindo(a) a **Alma de Cacau**! \U0001F36B\n\n"
-    "Sou a **Cacau**, sua assistente de chocolates artesanais. "
-    "Antes de te apresentar nossos bombons, como posso te chamar?"
-)
+# ──────────────────────────────────────────────────────────────────────────────
+# CSS DO ASSISTENTE
+# ──────────────────────────────────────────────────────────────────────────────
 
 _ASSISTANT_CSS = """
 <style>
@@ -137,167 +101,136 @@ _ASSISTANT_CSS = """
 .cacau-logo-wrap { display: flex; justify-content: center; margin-bottom: 10px; }
 .cacau-logo-wrap img {
     width: 200px; height: 200px; border-radius: 50%; object-fit: cover;
-    border: 4px solid #F2A93B; animation: cacau-pulse 2.2s infinite;
+    border: 4px solid #F2A93B; animation: cacauPulse 2.2s infinite;
 }
-@keyframes cacau-pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(232, 97, 60, 0.55); transform: scale(1); }
-    70%  { box-shadow: 0 0 0 16px rgba(232, 97, 60, 0); transform: scale(1.03); }
-    100% { box-shadow: 0 0 0 0 rgba(232, 97, 60, 0); transform: scale(1); }
+@keyframes cacauPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(232,97,60,0.55); transform: scale(1); }
+    70%  { box-shadow: 0 0 0 16px rgba(232,97,60,0); transform: scale(1.03); }
+    100% { box-shadow: 0 0 0 0 rgba(232,97,60,0); transform: scale(1); }
 }
 .cacau-title {
     font-family: "Playfair Display", serif; font-size: 2rem; font-weight: 700;
-    margin: 4px 0 0 0; background: linear-gradient(90deg, #E8613C, #F2A93B);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    background-clip: text; animation: cacau-fadein 0.8s ease-out;
+    margin: 4px 0 0 0;
+    background: linear-gradient(90deg, #E8613C, #F2A93B);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
 }
 .cacau-subtitle { color: #6B7A3A; font-style: italic; font-size: 0.85rem; margin-top: 2px; }
-@keyframes cacau-fadein {
-    from { opacity: 0; transform: translateY(-6px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
 [data-testid="stChatMessage"] {
     background: #FFF3E4; border-radius: 14px; padding: 6px 10px;
-    border: 1px solid rgba(232, 97, 60, 0.15);
+    border: 1px solid rgba(232,97,60,0.15);
 }
 section[data-testid="stBottom"] > div {
-    background: linear-gradient(180deg, transparent, #FFF3E4 70%);
-    padding-top: 8px;
+    background: linear-gradient(180deg, transparent, #FFF3E4 70%); padding-top: 8px;
 }
 [data-testid="stChatInput"] {
-    border: 2px solid #F2A93B !important;
-    border-radius: 24px !important;
-    background: #FFFAF4 !important;
-    box-shadow: 0 4px 18px rgba(232, 97, 60, 0.13) !important;
+    border: 2px solid #F2A93B !important; border-radius: 24px !important;
+    background: #FFFAF4 !important; box-shadow: 0 4px 18px rgba(232,97,60,0.13) !important;
 }
-[data-testid="stChatInput"] textarea {
-    font-size: 0.96rem !important;
-    color: #3D2210 !important;
-    background: transparent !important;
-}
-[data-testid="stChatInput"] textarea::placeholder {
-    color: #C49A6C !important;
-    font-style: italic;
-}
-[data-testid="stChatInput"] button svg {
-    fill: #E8613C !important;
-}
+[data-testid="stChatInput"] textarea { font-size: 0.96rem !important; color: #3D2210 !important; }
+[data-testid="stChatInput"] textarea::placeholder { color: #C49A6C !important; font-style: italic; }
+[data-testid="stChatInput"] button svg { fill: #E8613C !important; }
 </style>
 """
 
+# ──────────────────────────────────────────────────────────────────────────────
+# HELPERS DE UI
+# ──────────────────────────────────────────────────────────────────────────────
 
-# ------------------------------------------------------------------
-# Helpers de UI
-# ------------------------------------------------------------------
 def _logo_html() -> str:
     if _LOGO_PATH.exists():
         data = base64.b64encode(_LOGO_PATH.read_bytes()).decode()
-        return f'<img src="data:image/png;base64,{data}">'  
-    return "\U0001F36B"
+        return f'<img src="data:image/png;base64,{data}">'
+    return "🍫"
 
 
 @st.cache_resource(show_spinner=False)
-def _get_cacau_avatar():
-    """Retorna imagem PIL da Cacau para uso como avatar no chat."""
+def _cacau_avatar():
+    """Retorna imagem PIL ou emoji da Cacau para avatar no chat."""
     try:
-        from PIL import Image as _PILImage
+        from PIL import Image as _PIL
         if _LOGO_PATH.exists():
-            img = _PILImage.open(str(_LOGO_PATH))
+            img = _PIL.open(str(_LOGO_PATH))
             img.load()
             return img
     except Exception:
         pass
-    return "\U0001F36B"
+    return "🍫"
 
 
-def _hero_header_html() -> str:
-    return f"""
-    <div class="cacau-hero">
-        <div class="cacau-logo-wrap">{_logo_html()}</div>
-        <div class="cacau-title">Alma de Cacau</div>
-        <div class="cacau-subtitle">Trufas artesanais feitas com alma</div>
-    </div>
-    """
+def _hero_html() -> str:
+    return (
+        '<div class="cacau-hero">'
+        f'<div class="cacau-logo-wrap">{_logo_html()}</div>'
+        '<div class="cacau-title">Alma de Cacau</div>'
+        '<div class="cacau-subtitle">Trufas artesanais feitas com alma</div>'
+        "</div>"
+    )
 
 
-def _detect_products(text: str):
-    text_lower = text.lower()
-    found = []
-    for key, info in _PRODUCT_MAP.items():
-        if key in text_lower and info not in found:
+def _detect_products_in_text(text: str) -> list[dict]:
+    """Detecta produtos mencionados em texto e retorna lista de infos únicas."""
+    lower = text.lower()
+    found: list[dict] = []
+    seen: set[str] = set()
+    for info in PRODUCT_MAP.values():
+        if info["label"] not in seen and info["label"].lower() in lower:
             found.append(info)
+            seen.add(info["label"])
     return found
 
 
-def _show_product_images(products: list):
+def _show_product_images(products: list[dict]) -> None:
     if not products:
         return
     cols = st.columns(len(products))
     for col, info in zip(cols, products):
         img_path = _PRODUCTS_DIR / info.get("file", "")
         with col:
-            if info.get("file") and img_path.exists():
-                caption = f"{info.get('label', '')} - {info.get('price', '')}"
-                st.image(str(img_path), caption=caption, width="stretch")
+            if img_path.exists():
+                st.image(
+                    str(img_path),
+                    caption=f"{info['label']} — {info['price_str']}",
+                    use_container_width=True,
+                )
 
 
-def _extract_lead(prompt: str):
-    if st.session_state.get("lead_name"):
-        return
-    match = re.search(r"(?:meu nome e|me chamo|sou o|sou a|eu sou)\s+([A-Za-z\u00c0-\u00fa]+)", prompt, re.IGNORECASE)
-    if match:
-        st.session_state.lead_name = match.group(1).strip().title()
-    elif len(prompt.strip().split()) <= 3 and prompt.strip().isalpha():
-        st.session_state.lead_name = prompt.strip().title()
-
-
-def _name_prompt() -> str:
-    return "Antes de continuarmos, como posso te chamar? \U0001F60A"
-
-
-def _flavor_prompt(name: str) -> str:
-    return (
-        f"Prazer, {name}! \U0001F36B Voce ja tem algum sabor em mente ou prefere "
-        "que eu apresente os sabores disponiveis?"
-    )
-
-
-# ------------------------------------------------------------------
-# Groq
-# ------------------------------------------------------------------
-def _build_chat_history():
-    history = [{"role": "system", "content": _SYSTEM_PROMPT}]
-    for msg in st.session_state.messages:
-        history.append({"role": msg["role"], "content": msg["content"]})
-    return history
-
+# ──────────────────────────────────────────────────────────────────────────────
+# GROQ — LLM
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _call_groq() -> str:
-    client = Groq(api_key=GROQ_API_KEY)
-    completion = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=_build_chat_history(),
-        temperature=0.6,
-        max_tokens=400,
-    )
-    return completion.choices[0].message.content.strip()
+    """Resposta da Cacau via Groq/Llama usando fm_messages como histórico."""
+    history = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    for msg in st.session_state.fm_messages:
+        history.append({"role": msg["role"], "content": msg["content"]})
+    try:
+        client = Groq(api_key=config.GROQ_API_KEY)
+        resp = client.chat.completions.create(
+            model=config.GROQ_MODEL,
+            messages=history,
+            temperature=0.6,
+            max_tokens=400,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Desculpe, tive um problema momentâneo. Pode repetir? 😊 (Erro: {e})"
 
 
 def _classify_intent(user_text: str) -> dict:
-    default = {
-        "intencao_compra": False, "sabor": None,
-        "quer_conhecer_sabores": False, "ja_conhece_marca": False,
-    }
+    """Classifica intenção de compra via LLM (fallback de detecção)."""
+    default: dict = {"intencao_compra": False, "sabor": None, "quer_conhecer_sabores": False}
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        completion = client.chat.completions.create(
-            model=GROQ_MODEL,
+        client = Groq(api_key=config.GROQ_API_KEY)
+        resp = client.chat.completions.create(
+            model=config.GROQ_MODEL,
             messages=[
-                {"role": "system", "content": _INTENT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_text},
+                {"role": "system", "content": _INTENT_PROMPT},
+                {"role": "user",   "content": user_text},
             ],
-            temperature=0, max_tokens=150,
+            temperature=0,
+            max_tokens=100,
         )
-        raw = completion.choices[0].message.content.strip()
+        raw = resp.choices[0].message.content.strip()
         raw = re.sub(r"^```json|```$", "", raw, flags=re.MULTILINE).strip()
         default.update(json.loads(raw))
     except Exception:
@@ -305,424 +238,653 @@ def _classify_intent(user_text: str) -> dict:
     return default
 
 
-# ------------------------------------------------------------------
-# Integracao real: Customer / Address / Order / Payment / Asaas
-# ------------------------------------------------------------------
-def _get_or_create_customer(db) -> int:
-    if st.session_state.get("customer_profile_id"):
-        return st.session_state["customer_profile_id"]
+# ──────────────────────────────────────────────────────────────────────────────
+# FLOW MANAGER — instância cacheada
+# ──────────────────────────────────────────────────────────────────────────────
 
-    cs = CustomerService(db)
-    email = st.session_state.get("lead_email") or f"lead_{uuid.uuid4().hex[:8]}@almadecacau.local"
-    senha_temp = uuid.uuid4().hex[:12]
-
-    profile, err = cs.register(CreateCustomerInput(
-        email=email,
-        password=senha_temp,
-        full_name=st.session_state.get("lead_name", "Cliente"),
-        phone=st.session_state.get("lead_whatsapp", ""),
-        marketing_consent=False,
-    ))
-    if err:
-        raise RuntimeError(err)
-
-    db.flush()
-    st.session_state["customer_profile_id"] = profile.id
-    return profile.id
+@st.cache_resource(show_spinner=False)
+def _get_flow_manager() -> CacauFlowManager:
+    return CacauFlowManager()
 
 
-def _get_or_create_address(db, customer_id: int) -> int:
-    cs = CustomerService(db)
-    endereco_raw = st.session_state.get("lead_endereco") or ""
-    partes = endereco_raw.split(",")
-    street = partes[0].strip() if partes and partes[0].strip() else "Nao informado"
-    number = partes[1].strip() if len(partes) > 1 and partes[1].strip() else "S/N"
+# ──────────────────────────────────────────────────────────────────────────────
+# INICIALIZAÇÃO DE ESTADO
+# ──────────────────────────────────────────────────────────────────────────────
 
-    addr, err = cs.add_address(customer_id, AddressInput(
-        label="Entrega",
-        street=street,
-        number=number,
-        complement=None,
-        neighborhood=st.session_state.get("lead_bairro") or "Nao informado",
-        city=st.session_state.get("lead_cidade") or "Nao informado",
-        state=(st.session_state.get("lead_uf") or "SP").upper()[:2],
-        zip_code=st.session_state.get("lead_cep") or "00000000",
-        is_default=True,
-    ))
-    if err:
-        raise RuntimeError(err)
-    db.flush()
-    return addr.id
+def _init_state() -> None:
+    _get_flow_manager().init_state()
 
+    extras = {
+        "fm_lead_name":        None,
+        "fm_asaas_cid":        None,
+        "fm_pix_error":        "",
+        "fm_video_seen":       False,
+        "_had_name_before":    False,
+    }
+    for k, v in extras.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-def _find_product_by_flavor_label(db, flavor_label: str):
-    return db.query(Product).filter(
-        Product.name.ilike(f"%{flavor_label}%"), Product.is_active == True
-    ).first()
-
-
-def _ensure_asaas_customer_id() -> str:
-    if st.session_state.get("asaas_customer_id"):
-        return st.session_state["asaas_customer_id"]
-
-    cpf = (st.session_state.get("lead_cpf") or "").strip()
-    if not cpf:
-        raise RuntimeError("CPF e obrigatorio para gerar o pagamento PIX.")
-
-    data, err = asaas_create_customer(
-        name=st.session_state.get("lead_name", "Cliente"),
-        cpf_cnpj=cpf,
-        email=st.session_state.get("lead_email") or None,
-        phone=st.session_state.get("lead_whatsapp") or None,
-        external_reference=str(st.session_state.get("customer_profile_id", "")),
-    )
-    if err:
-        raise RuntimeError(f"Erro ao criar cliente no Asaas: {err}")
-
-    asaas_id = data.get("id")
-    st.session_state["asaas_customer_id"] = asaas_id
-    return asaas_id
+    if not st.session_state.fm_chat_started:
+        st.session_state.fm_messages.append({
+            "role":    "assistant",
+            "content": (
+                "Olá! Seja muito bem-vindo(a) à **Alma de Cacau**! 🍫\n\n"
+                "Sou a **Cacau**, sua assistente de chocolates artesanais. "
+                "Antes de te apresentar nossos bombons, como posso te chamar?"
+            ),
+        })
+        st.session_state.fm_chat_started = True
 
 
-def _register_order_and_payment() -> dict:
-    order_info = st.session_state.get("order_confirmed") or {}
-    flavor_label = order_info.get("flavor", "")
-    quantity = int(order_info.get("quantity", 1))
+# ──────────────────────────────────────────────────────────────────────────────
+# WIDGETS DE ESTADO
+# ──────────────────────────────────────────────────────────────────────────────
 
-    asaas_customer_id = _ensure_asaas_customer_id()
+def _render_quantity_widget() -> None:
+    """Seletor numérico de quantidade — flow_state: aguardando_quantidade."""
+    flavor_key  = st.session_state.get("fm_flavor_key")
+    flavor_info = st.session_state.get("fm_flavor_info")
+    if not flavor_key or not flavor_info:
+        st.session_state.flow_state = "aguardando_intencao"
+        st.rerun()
+        return
 
-    with get_db() as db:
-        customer_id = _get_or_create_customer(db)
-        address_id = _get_or_create_address(db, customer_id)
-
-        product = _find_product_by_flavor_label(db, flavor_label)
-        if not product:
-            raise RuntimeError(f"Produto '{flavor_label}' nao encontrado no catalogo.")
-
-        order_service = OrderService(db)
-        order, err = order_service.create_order(CreateOrderInput(
-            customer_id=customer_id,
-            delivery_type=DeliveryType.delivery,
-            delivery_address_id=address_id,
-            items=[OrderItemInput(product_id=product.id, quantity=quantity, item_notes=None)],
-            coupon_code=None,
-            customer_notes=st.session_state.get("lead_observacao", ""),
-            desired_delivery_date=None,
-        ))
-        if err:
-            raise RuntimeError(err)
-
-        payment_service = PaymentService(db)
-        payment, err = payment_service.create_payment(CreatePaymentInput(
-            order_id=order.id,
-            method=PaymentMethod.pix,
-            asaas_customer_id=asaas_customer_id,
-        ))
-        if err:
-            raise RuntimeError(err)
-
-        pix_data, pix_err = payment_service.get_pix_qr_code(payment.id)
-
-        notif = NotificationService(db)
-        notif.notify_order_confirmation(
-            order_number=order.order_number,
-            customer_name=st.session_state.get("lead_name", "Cliente"),
-            total=f"{order.total:.2f}",
-            customer_id=customer_id,
-        )
-
-        return {
-            "order_number": order.order_number,
-            "payment_id": payment.id,
-            "total": float(order.total),
-            "pix": pix_data or {},
-            "pix_error": pix_err or "",
-        }
-
-
-def _render_payment_block():
-    st.chat_message("assistant", avatar=_get_cacau_avatar()).markdown(
-        "Perfeito! Para gerar o pagamento PIX, preciso confirmar seus dados de entrega \U0001F4E6"
-    )
-    with st.container(border=True):
-        st.session_state["lead_name"] = st.text_input("Nome completo", value=st.session_state.get("lead_name", ""))
-        st.session_state["lead_whatsapp"] = st.text_input("WhatsApp", value=st.session_state.get("lead_whatsapp", ""))
-        st.session_state["lead_endereco"] = st.text_input("Rua e numero (ex: Rua das Flores, 123)", value=st.session_state.get("lead_endereco", ""))
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.session_state["lead_bairro"] = st.text_input("Bairro", value=st.session_state.get("lead_bairro", ""))
-            st.session_state["lead_cidade"] = st.text_input("Cidade", value=st.session_state.get("lead_cidade", ""))
-        with col_b:
-            st.session_state["lead_uf"] = st.text_input("UF", value=st.session_state.get("lead_uf", ""), max_chars=2)
-            st.session_state["lead_cep"] = st.text_input("CEP", value=st.session_state.get("lead_cep", ""))
-        st.session_state["lead_email"] = st.text_input("E-mail", value=st.session_state.get("lead_email", ""))
-        st.session_state["lead_cpf"] = st.text_input("CPF", value=st.session_state.get("lead_cpf", ""))
-
-        missing = []
-        if not st.session_state.get("lead_name"):
-            missing.append("nome")
-        if not st.session_state.get("lead_endereco"):
-            missing.append("endereco")
-        if not st.session_state.get("lead_whatsapp"):
-            missing.append("whatsapp")
-        if not st.session_state.get("lead_cpf"):
-            missing.append("cpf")
-
-        ready = len(missing) == 0
-        if not ready:
-            st.info("Faltam: " + ", ".join(missing))
-        else:
-            st.success("Pedido pronto para gerar o pagamento.")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("\U0001F4B3 Gerar PIX", key="gerar_pix_db", width="stretch", disabled=not ready):
-                try:
-                    result = _register_order_and_payment()
-                    st.session_state["db_payment_result"] = result
-                    st.session_state["db_payment_error"] = ""
-                except Exception as exc:
-                    st.session_state["db_payment_result"] = None
-                    st.session_state["db_payment_error"] = str(exc)
-        with col2:
-            if st.button("\u21A9\uFE0F Voltar para o chat", key="voltar_pagamento_db", width="stretch"):
-                st.session_state.awaiting_payment = False
-                st.rerun()
-
-        if st.session_state.get("db_payment_error"):
-            st.error(st.session_state["db_payment_error"])
-
-        result = st.session_state.get("db_payment_result")
-        if result:
-            st.success(f"\u2705 Pedido **{result['order_number']}** criado com sucesso!")
-            st.caption(f"Total: R$ {result['total']:.2f}".replace(".", ","))
-
-            pix = result.get("pix") or {}
-            payload = pix.get("payload") or pix.get("Payload") or ""
-            encoded = pix.get("encodedImage") or pix.get("EncodedImage") or ""
-
-            if payload or encoded:
-                st.markdown("#### \U0001F4B8 Pague via PIX")
-                col_qr, col_link = st.columns([1, 1])
-                with col_qr:
-                    if encoded:
-                        st.image(
-                            f"data:image/png;base64,{encoded}",
-                            caption="Aponte a camera do seu banco",
-                            use_container_width=True,
-                        )
-                    else:
-                        st.info("QR Code nao disponivel")
-                with col_link:
-                    st.markdown("**\U0001F4CB Chave PIX (copia e cola):**")
-                    if payload:
-                        st.code(payload, language="text")
-                        st.caption("Cole este codigo no app do seu banco para pagar.")
-                    else:
-                        st.warning("Chave PIX nao retornada pela API.")
-            else:
-                pix_err = result.get("pix_error", "")
-                if pix_err:
-                    st.error(f"Erro ao gerar QR Code PIX: {pix_err}")
-                else:
-                    st.warning("QR Code PIX nao retornado. Verifique a integracao com o Asaas.")
-                st.caption(f"Referencia do pagamento: {result.get('payment_id', '')}")
-
-            if payment_is_approved(payment_id=result["payment_id"]):
-                show_payment_confirmed_video()
-    st.stop()
-
-
-# ------------------------------------------------------------------
-# Fluxo de compra estruturado (sabor -> quantidade)
-# ------------------------------------------------------------------
-def _render_quantity_selector(flavor_key: str, flavor_info: dict):
+    fm = _get_flow_manager()
     with st.container(border=True):
         img_path = _PRODUCTS_DIR / flavor_info.get("file", "")
-        if flavor_info.get("file") and img_path.exists():
-            st.image(str(img_path), caption=flavor_info.get("label", ""), width="stretch")
+        if img_path.exists():
+            st.image(str(img_path), caption=flavor_info["label"], width=220)
 
-        st.markdown(f"**{flavor_info.get('label', '')}** - {flavor_info.get('price', '')}")
-        st.caption(f"\u2728 {flavor_info.get('experiencia', '').capitalize()}")
-        st.write(flavor_info.get("descricao", ""))
-        st.info(f"\U0001F36B **Como degustar:** {flavor_info.get('degustacao', '')}")
+        st.markdown(f"**{flavor_info['label']}** — {flavor_info['price_str']}")
+        st.caption(f"✨ {flavor_info['experiencia']}")
+        st.write(flavor_info["descricao"])
+        st.info(f"🍫 **Como degustar:** {flavor_info['degustacao']}")
 
-        qty_state_key = f"qty_{flavor_key}"
-        if qty_state_key not in st.session_state:
-            st.session_state[qty_state_key] = 1
+        # Usa a key do widget diretamente no session_state (evita conflito value/key)
+        qty_key = f"qty_{flavor_key}"
+        if qty_key not in st.session_state:
+            st.session_state[qty_key] = 1
 
-        st.session_state[qty_state_key] = st.number_input(
-            "Quantidade desejada",
+        qty = st.number_input(
+            "Quantidade",
             min_value=1,
             max_value=50,
             step=1,
-            value=int(st.session_state[qty_state_key]),
-            format="%d",
+            key=qty_key,  # Streamlit gerencia o valor via session_state[qty_key]
         )
-        number = st.session_state[qty_state_key]
-        st.write("Quantidade atual:", number)
 
-        try:
-            price_value = float(flavor_info.get("price", "0").replace("R$", "").replace(",", ".").strip())
-            subtotal = number * price_value
-            st.caption(f"Subtotal: R$ {subtotal:.2f}".replace(".", ","))
-        except (ValueError, AttributeError):
-            pass
+        subtotal = round(flavor_info["price"] * qty, 2)
+        st.caption(f"Subtotal: **R$ {subtotal:.2f}**".replace(".", ","))
 
-        col_confirm, col_back = st.columns(2)
-        with col_confirm:
-            if st.button("\u2705 Confirmar pedido", key=f"confirm_{flavor_key}", width="stretch"):
-                st.session_state.order_confirmed = {
-                    "flavor": flavor_info.get("label", ""),
-                    "quantity": number,
-                    "unit_price": flavor_info.get("price", ""),
-                }
-                st.session_state.awaiting_quantity = False
-                st.session_state.awaiting_payment = True
+        col_add, col_back = st.columns(2)
+        with col_add:
+            if st.button("✅ Adicionar ao pedido", key=f"add_{flavor_key}", use_container_width=True):
+                fm.add_to_cart(flavor_key, flavor_info, qty)
+                # Limpa estado do widget para próxima seleção
+                if qty_key in st.session_state:
+                    del st.session_state[qty_key]
+                st.session_state.fm_flavor_key  = None
+                st.session_state.fm_flavor_info = None
+                st.session_state.flow_state = "aguardando_adicional"
+                st.session_state.fm_messages.append({
+                    "role":    "assistant",
+                    "content": (
+                        f"Adicionei **{qty}× {flavor_info['label']}** ao pedido! 🎉\n\n"
+                        f"Subtotal: R$ {subtotal:.2f}\n\n"
+                        "Deseja adicionar mais algum item ou finalizar o pedido?"
+                    ).replace(".", ",", 1),
+                })
                 st.rerun()
         with col_back:
-            if st.button("\u21A9\uFE0F Voltar para o chat", key=f"back_{flavor_key}", width="stretch"):
-                st.session_state.awaiting_quantity = False
+            if st.button("↩️ Voltar ao chat", key=f"back_{flavor_key}", use_container_width=True):
+                # Limpa estado do widget
+                if qty_key in st.session_state:
+                    del st.session_state[qty_key]
+                st.session_state.fm_flavor_key  = None
+                st.session_state.fm_flavor_info = None
+                st.session_state.flow_state = "aguardando_sabor"
                 st.rerun()
 
 
-_BUY_KEYWORDS = {"quero", "vou", "levar", "comprar", "pode", "fechar", "fechou", "sim", "escolhi", "manda", "queria", "pedido"}
+def _render_order_summary() -> None:
+    """Resumo do carrinho com confirmação — flow_state: aguardando_confirmacao_total."""
+    fm    = _get_flow_manager()
+    cart  = st.session_state.fm_cart
+    total = fm.cart_total()
 
-
-def _maybe_stop_for_purchase(prompt: str):
-    intent = _classify_intent(prompt)
-    st.session_state.last_intent = intent
-
-    # Fallback por palavras-chave caso a LLM nao detecte corretamente
-    if not (intent.get("intencao_compra") and intent.get("sabor")):
-        prompt_lower = prompt.lower()
-        has_buy = any(kw in prompt_lower for kw in _BUY_KEYWORDS)
-        if has_buy:
-            for key in _PRODUCT_MAP:
-                if key in prompt_lower:
-                    intent["intencao_compra"] = True
-                    intent["sabor"] = key
-                    break
-
-    if intent.get("intencao_compra") and intent.get("sabor"):
-        flavor_key = str(intent["sabor"]).lower().strip()
-        flavor_info = _PRODUCT_MAP.get(flavor_key)
-        if flavor_info:
-            st.session_state.pending_flavor = flavor_key
-            st.session_state.pending_flavor_info = flavor_info
-            st.session_state.awaiting_quantity = True
-
-
-def _render_pending_quantity_block():
-    if not st.session_state.get("awaiting_quantity"):
+    if not cart:
+        st.session_state.flow_state = "aguardando_intencao"
+        st.rerun()
         return
-    flavor_key = st.session_state.get("pending_flavor")
-    flavor_info = st.session_state.get("pending_flavor_info")
-    if not flavor_key or not flavor_info:
-        st.session_state.awaiting_quantity = False
+
+    with st.container(border=True):
+        st.markdown("### 🧾 Resumo do Pedido")
+        for item in cart:
+            st.markdown(
+                f"• **{item['label']}** × {item['quantity']} unid. "
+                f"→ R$ {item['subtotal']:.2f}".replace(".", ",")
+            )
+        st.markdown("---")
+        st.markdown(
+            f"### TOTAL: R$ {total:.2f}".replace(".", ",")
+        )
+
+        col_add, col_confirm = st.columns(2)
+        with col_add:
+            if st.button("➕ Adicionar mais", key="resumo_add", use_container_width=True):
+                st.session_state.flow_state = "aguardando_adicional"
+                st.session_state.fm_messages.append({
+                    "role": "assistant", "content": "Claro! Qual sabor você gostaria de adicionar?",
+                })
+                st.rerun()
+        with col_confirm:
+            if st.button("✅ Confirmar pedido", key="resumo_confirm", use_container_width=True, type="primary"):
+                st.session_state.flow_state = "aguardando_autorizacao_dados"
+                st.session_state.fm_messages.append({
+                    "role":    "assistant",
+                    "content": "Ótimo! Para processar o pedido, precisarei de algumas informações. Confira a tela abaixo 🔐",
+                })
+                st.rerun()
+
+
+def _render_lgpd_screen() -> None:
+    """Consentimento LGPD — flow_state: aguardando_autorizacao_dados."""
+    fm    = _get_flow_manager()
+    total = fm.cart_total()
+
+    with st.container(border=True):
+        st.markdown("### 🔐 Autorização de Dados")
+        st.markdown(
+            f"Para concluir seu pedido de **R$ {total:.2f}**, precisaremos coletar:".replace(".", ",")
+        )
+        st.info(
+            "📝 **Nome** para a entrega\n\n"
+            "📍 **Endereço** completo de entrega\n\n"
+            "🔒 **CPF** para geração do PIX (processado com segurança pelo Asaas)"
+        )
+        st.caption("Dados usados exclusivamente para esta transação. LGPD 13.709/2018.")
+
+        col_ok, col_cancel = st.columns(2)
+        with col_ok:
+            if st.button("✅ EU CONFIRMO", key="lgpd_ok", use_container_width=True, type="primary"):
+                st.session_state.flow_state = "coletando_nome_entrega"
+                st.session_state.fm_messages.append({
+                    "role": "assistant", "content": "Perfeito! 😊 Qual o **nome** de quem vai receber o pedido?",
+                })
+                st.rerun()
+        with col_cancel:
+            if st.button("❌ Cancelar", key="lgpd_cancel", use_container_width=True):
+                st.session_state.flow_state = "aguardando_confirmacao_total"
+                st.session_state.fm_messages.append({
+                    "role": "assistant", "content": "Entendido. Seu pedido continua reservado. Deseja revisá-lo?",
+                })
+                st.rerun()
+
+
+def _render_gerando_pix() -> None:
+    """Gera cliente no Asaas, cria pedido e cobrança PIX — flow_state: gerando_pix."""
+    if st.session_state.get("fm_pix_result"):
+        st.session_state.flow_state = "aguardando_pagamento_pix"
+        st.rerun()
         return
-    st.chat_message("assistant", avatar=_get_cacau_avatar()).markdown(
-        f"Otima escolha! Vamos definir a quantidade da sua **{flavor_info.get('label', '')}** \U0001F447"
-    )
-    _render_quantity_selector(flavor_key, flavor_info)
-    st.stop()
+
+    with st.spinner("Preparando seu PIX com segurança... 🔐"):
+        try:
+            result = _build_pix_payment()
+            st.session_state.fm_pix_result   = result.get("pix") or {}
+            st.session_state.fm_payment_id   = result.get("payment_id")
+            st.session_state.fm_order_number = result.get("order_number")
+            st.session_state.fm_pix_error    = result.get("pix_error", "")
+            st.session_state.fm_asaas_cid    = result.get("asaas_customer_id")
+            st.session_state.flow_state = "aguardando_pagamento_pix"
+            st.session_state.fm_messages.append({
+                "role":    "assistant",
+                "content": (
+                    f"✅ Pedido **{result['order_number']}** criado!\n\n"
+                    "Escaneie o QR Code PIX abaixo ou use o código Copia e Cola. "
+                    "Confirmarei automaticamente quando o pagamento chegar. 🍫"
+                ),
+            })
+        except Exception as exc:
+            st.session_state.fm_pix_error = str(exc)
+            st.session_state.fm_pix_result = None
+            st.session_state.flow_state = "coletando_cpf"
+            st.session_state.fm_messages.append({
+                "role":    "assistant",
+                "content": f"Tive um problema ao gerar o PIX: {exc}\n\nPode tentar novamente? Digite seu CPF:",
+            })
+    st.rerun()
 
 
-# ------------------------------------------------------------------
-# Inicializacao de estado
-# ------------------------------------------------------------------
-def _init_session_state():
-    defaults = {
-        "messages": [], "lead_name": None, "lead_phone": None, "lead_email": None,
-        "lead_endereco": None, "lead_whatsapp": None, "lead_cpf": None,
-        "lead_bairro": None, "lead_cidade": None, "lead_uf": None, "lead_cep": None,
-        "chat_started": False, "awaiting_quantity": False, "awaiting_payment": False,
-        "pending_flavor": None, "pending_flavor_info": None,
-        "order_confirmed": None, "last_intent": None,
-        "customer_profile_id": None, "asaas_customer_id": None,
-        "db_payment_result": None, "db_payment_error": "",
-        "welcome_video_shown": False,
+def _build_pix_payment() -> dict:
+    """Cria cliente Asaas, pedido no banco e cobrança PIX. Retorna info do resultado."""
+    from database.engine import get_db
+    from database.models import Product, PaymentMethod, DeliveryType
+    from services.customer_service import CustomerService
+    from services.order_service import OrderService
+    from services.payment_service import PaymentService
+    from schemas.customer import CreateCustomerInput, AddressInput
+    from schemas.order import CreateOrderInput, OrderItemInput
+    from schemas.payment import CreatePaymentInput
+    from adapters.asaas_adapter import create_customer as asaas_create_customer
+
+    fm      = _get_flow_manager()
+    cart    = st.session_state.fm_cart
+    cpf     = st.session_state.fm_cpf or ""
+    name    = st.session_state.fm_nome_entrega or st.session_state.get("fm_lead_name") or "Cliente"
+    address = st.session_state.fm_endereco_entrega or "Não informado"
+
+    # Criar/buscar cliente no Asaas
+    asaas_cid = st.session_state.get("fm_asaas_cid") or st.session_state.get("asaas_customer_id")
+    if not asaas_cid:
+        cust_email = (
+            st.session_state.get("customer_email")
+            or f"lead_{uuid.uuid4().hex[:8]}@almadecacau.local"
+        )
+        cdata, cerr = asaas_create_customer(
+            name=name,
+            cpf_cnpj=cpf,
+            email=cust_email,
+            external_reference=str(st.session_state.get("customer_id") or ""),
+        )
+        if cerr:
+            raise RuntimeError(f"Erro ao criar cliente no Asaas: {cerr}")
+        asaas_cid = cdata["id"]
+        st.session_state.fm_asaas_cid = asaas_cid
+
+    with get_db() as db:
+        # Garantir CustomerProfile no banco
+        customer_id = (
+            st.session_state.get("customer_id")
+            or st.session_state.get("fm_customer_profile_id")
+        )
+        if not customer_id:
+            cs = CustomerService(db)
+            email = (
+                st.session_state.get("customer_email")
+                or f"lead_{uuid.uuid4().hex[:8]}@almadecacau.local"
+            )
+            profile, perr = cs.register(CreateCustomerInput(
+                email=email,
+                password=uuid.uuid4().hex[:12],
+                full_name=name,
+                phone="",
+                marketing_consent=False,
+            ))
+            if perr:
+                raise RuntimeError(perr)
+            db.flush()
+            customer_id = profile.id
+            st.session_state.fm_customer_profile_id = customer_id
+
+        # Endereço de entrega
+        cs2 = CustomerService(db)
+        partes = address.split(",")
+        raw_street = partes[0].strip() if partes else ""
+        # Garante min_length=3 exigido pela AddressInput
+        street = raw_street if len(raw_street) >= 3 else (f"Rua {raw_street}" if raw_street else "Endereco nao informado")
+        number = partes[1].strip() if len(partes) > 1 else "S/N"
+        addr, aerr = cs2.add_address(customer_id, AddressInput(
+            label="Entrega",
+            street=street,
+            number=number,
+            complement=None,
+            neighborhood="Não informado",
+            city="Não informado",
+            state="SP",
+            zip_code="00000000",
+            is_default=True,
+        ))
+        if aerr:
+            raise RuntimeError(aerr)
+        db.flush()
+
+        # Mapeia itens do carrinho para produtos do banco
+        order_items: list[OrderItemInput] = []
+        for cart_item in cart:
+            # Busca por SKU (preferencial) ou por nome — evita problemas de acento
+            sku = cart_item.get("sku", "")
+            if sku:
+                product = db.query(Product).filter_by(sku=sku, is_active=True).first()
+            else:
+                product = (
+                    db.query(Product)
+                    .filter(
+                        Product.name.ilike(f"%{cart_item['label']}%"),
+                        Product.is_active == True,
+                    )
+                    .first()
+                )
+            if not product:
+                raise RuntimeError(
+                    f"Produto '{cart_item['label']}' (SKU: {sku}) não encontrado no catálogo. "
+                    "Execute o seed para popular o catálogo."
+                )
+            order_items.append(OrderItemInput(
+                product_id=product.id,
+                quantity=cart_item["quantity"],
+                item_notes=None,
+            ))
+
+        # Criação do pedido
+        order_svc = OrderService(db)
+        order, oerr = order_svc.create_order(CreateOrderInput(
+            customer_id=customer_id,
+            delivery_type=DeliveryType.delivery,
+            delivery_address_id=addr.id,
+            items=order_items,
+            coupon_code=None,
+            customer_notes="",
+            desired_delivery_date=None,
+        ))
+        if oerr:
+            raise RuntimeError(oerr)
+
+        # Criação do pagamento PIX
+        pay_svc = PaymentService(db)
+        payment, pay_err = pay_svc.create_payment(CreatePaymentInput(
+            order_id=order.id,
+            method=PaymentMethod.pix,
+            asaas_customer_id=asaas_cid,
+        ))
+        if pay_err:
+            raise RuntimeError(pay_err)
+
+        pix_data, pix_err = pay_svc.get_pix_qr_code(payment.id)
+
+        # Lê atributos DENTRO do bloco with — evita DetachedInstanceError após db.close()
+        _result = {
+            "order_number":      order.order_number,
+            "payment_id":        payment.id,
+            "asaas_customer_id": asaas_cid,
+            "total":             float(order.total),
+            "pix":               pix_data or {},
+            "pix_error":         pix_err or "",
+        }
+
+    return _result
+
+
+def _render_pix_panel() -> None:
+    """Exibe QR Code PIX e ativa polling — flow_state: aguardando_pagamento_pix."""
+    pix   = st.session_state.get("fm_pix_result") or {}
+    err   = st.session_state.get("fm_pix_error", "")
+    total = _get_flow_manager().cart_total()
+
+    with st.container(border=True):
+        st.markdown("### 💸 Pagamento via PIX")
+        st.caption(f"Total: **R$ {total:.2f}**".replace(".", ","))
+
+        encoded = pix.get("encodedImage") or pix.get("EncodedImage") or ""
+        payload = pix.get("payload") or pix.get("Payload") or ""
+
+        if encoded or payload:
+            col_qr, col_code = st.columns(2)
+            with col_qr:
+                if encoded:
+                    st.image(
+                        f"data:image/png;base64,{encoded}",
+                        caption="Aponte a câmera do seu banco",
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("QR Code não disponível")
+            with col_code:
+                st.markdown("**📋 Copia e Cola:**")
+                if payload:
+                    st.code(payload, language="text")
+                    st.caption("Cole este código no app do seu banco.")
+                else:
+                    st.warning("Código PIX não retornado pela API.")
+        elif err:
+            st.error(f"Erro ao gerar QR Code: {err}")
+            if st.button("🔄 Tentar novamente com novo CPF", key="pix_retry"):
+                st.session_state.fm_pix_result  = None
+                st.session_state.fm_pix_error   = ""
+                st.session_state.fm_cpf         = None
+                st.session_state.flow_state = "coletando_cpf"
+                st.session_state.fm_messages.append({
+                    "role": "assistant",
+                    "content": "Por favor, informe seu CPF novamente (somente números):",
+                })
+                st.rerun()
+        else:
+            st.warning("QR Code PIX não gerado. Verifique a integração com o Asaas.")
+
+        st.info("⏳ Aguardando confirmação de pagamento automaticamente...")
+
+    _render_payment_polling()
+
+
+@st.fragment(run_every=5)
+def _render_payment_polling() -> None:
+    """
+    Verifica o status do pagamento a cada 5 s (fragment independente).
+    Ao detectar aprovação, atualiza o estado e recarrega a aplicação.
+    """
+    if st.session_state.get("flow_state") != "aguardando_pagamento_pix":
+        return
+    if st.session_state.get("fm_payment_confirmed"):
+        return
+    payment_id = st.session_state.get("fm_payment_id")
+    if not payment_id:
+        return
+
+    try:
+        from database.engine import get_db
+        from database.models import Payment, PaymentStatus
+        with get_db() as db:
+            payment = db.query(Payment).filter_by(id=payment_id).first()
+            if payment and payment.status == PaymentStatus.approved:
+                st.session_state.fm_payment_confirmed = True
+                st.session_state.flow_state = "aguardando_entrega"
+                nome  = st.session_state.get("fm_nome_entrega", "")
+                end   = st.session_state.get("fm_endereco_entrega", "")
+                total = _get_flow_manager().cart_total()
+                num   = st.session_state.get("fm_order_number", "")
+                st.session_state.fm_messages.append({
+                    "role":    "assistant",
+                    "content": (
+                        f"✅ **Pagamento de R$ {total:.2f} confirmado!** 🎉\n\n"
+                        f"Pedido **{num}** em preparação com carinho, {nome}!\n\n"
+                        f"📦 Entrega para: {end}"
+                    ).replace(".", ",", 1),
+                })
+                st.rerun(scope="app")
+    except Exception:
+        pass  # Polling silencioso — tenta no próximo ciclo
+
+
+def _render_pos_pagamento() -> None:
+    """Vídeo de confirmação + status — flow_state: aguardando_entrega."""
+    fm    = _get_flow_manager()
+    nome  = st.session_state.get("fm_nome_entrega", "")
+    end   = st.session_state.get("fm_endereco_entrega", "")
+    total = fm.cart_total()
+    num   = st.session_state.get("fm_order_number", "")
+
+    with st.container(border=True):
+        st.markdown("### 🎉 Pedido Confirmado!")
+        st.success(
+            f"**Pedido {num}** em preparação! 🍫\n\n"
+            f"**Total pago:** R$ {total:.2f}\n\n"
+            f"**Entrega para:** {nome} — {end}"
+        )
+
+        if not st.session_state.get("fm_video_seen"):
+            video_path = _VIDEOS_DIR / "pagamento-confirmado.mp4"
+            if video_path.exists():
+                st.markdown("---")
+                st.markdown("#### 🎬 Uma mensagem especial da Alma de Cacau:")
+                cols = st.columns([1, 6, 1])
+                with cols[1]:
+                    st.video(str(video_path), autoplay=True)
+                if st.button("▶ Continuar", key="video_ok"):
+                    st.session_state.fm_video_seen = True
+                    st.rerun()
+        else:
+            st.info(
+                "Seu pedido está sendo preparado com muito carinho! "
+                "Em breve nossa equipe entrará em contato. 🤎"
+            )
+            if st.button("🍫 Fazer novo pedido", key="novo_pedido", type="primary"):
+                fm.reset_flow()
+                st.rerun()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PROCESSAMENTO DE ENTRADA
+# ──────────────────────────────────────────────────────────────────────────────
+
+_NAME_RE = re.compile(
+    r"(?:meu nome é|me chamo|sou o|sou a|eu sou)\s+([A-Za-z\u00c0-\u00fa]+)",
+    re.IGNORECASE,
+)
+
+
+def _extract_name(text: str) -> None:
+    """Tenta extrair o nome do cliente da mensagem."""
+    if st.session_state.get("fm_lead_name"):
+        return
+    m = _NAME_RE.search(text)
+    if m:
+        st.session_state.fm_lead_name = m.group(1).strip().title()
+    elif len(text.strip().split()) <= 3 and re.match(r"^[A-Za-zÀ-ú ]+$", text.strip()):
+        st.session_state.fm_lead_name = text.strip().title()
+
+
+def _process_input(text: str) -> None:
+    """
+    Processa mensagem do usuário:
+    1. Extrai nome, se ainda não coletado.
+    2. Registra no histórico fm_messages.
+    3. Delega ao CacauFlowManager.
+    4. Fallback: classifica intent via LLM.
+    5. Se sem resposta estruturada, pede ao Groq.
+    """
+    fm = _get_flow_manager()
+    _extract_name(text)
+    st.session_state.fm_messages.append({"role": "user", "content": text})
+
+    state = st.session_state.get("flow_state", "aguardando_intencao")
+
+    # Fallback de intent via LLM para estados conversacionais
+    if state in ("aguardando_intencao", "aguardando_adicional"):
+        intent = _classify_intent(text)
+        if intent.get("intencao_compra") and intent.get("sabor"):
+            key = str(intent["sabor"]).lower().strip()
+            if key in PRODUCT_MAP:
+                fm._set_flavor(key, PRODUCT_MAP[key])
+                st.session_state.flow_state = "aguardando_quantidade"
+                st.rerun()
+                return
+
+    response = fm.handle_user_message(text)
+    new_state = st.session_state.get("flow_state", "aguardando_intencao")
+
+    # Estados que usam widget — não precisam de resposta textual adicional
+    widget_states = {
+        "aguardando_quantidade", "aguardando_confirmacao_total",
+        "aguardando_autorizacao_dados", "gerando_pix",
+        "aguardando_pagamento_pix", "aguardando_entrega",
     }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    if new_state in widget_states and response is None:
+        st.rerun()
+        return
+
+    # Geração de resposta textual
+    if response is None:
+        had_name = st.session_state.get("_had_name_before", False)
+        name = st.session_state.get("fm_lead_name")
+        if not had_name and name:
+            response = (
+                f"Prazer, **{name}**! 🍫 Você já tem algum sabor em mente "
+                "ou prefere que eu apresente nossos sabores disponíveis?"
+            )
+            show_img = False  # mensagem de saudacao — sem imagem
+        else:
+            response = _call_groq()
+            show_img = True   # resposta do LLM pode exibir imagens
+    else:
+        show_img = False      # resposta estruturada do FlowManager — sem imagem
+
+    # Atualiza flag de nome conhecido
+    if st.session_state.get("fm_lead_name"):
+        st.session_state["_had_name_before"] = True
+
+    if response:
+        st.session_state.fm_messages.append({
+            "role": "assistant",
+            "content": response,
+            "skip_images": not show_img,
+        })
+
+    st.rerun()
 
 
-# ------------------------------------------------------------------
-# Pagina principal
-# ------------------------------------------------------------------
-def render():
+# ──────────────────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ──────────────────────────────────────────────────────────────────────────────
+
+def render() -> None:
+    """Entry point chamado pelo roteador de páginas."""
     try:
         _render_body()
-    except Exception as e:
-        st.error(f"\u26A0\uFE0F Erro na renderizacao do assistente: {e}")
-        st.code(traceback.format_exc())
+    except Exception as exc:
+        st.error(f"⚠️ Erro no assistente: {exc}")
+        if st.toggle("Ver detalhes técnicos", key="toggle_err"):
+            st.code(traceback.format_exc())
 
 
-def _render_body():
-    _init_session_state()
+def _render_body() -> None:
+    _init_state()
     st.markdown(_ASSISTANT_CSS, unsafe_allow_html=True)
-    st.markdown(_hero_header_html(), unsafe_allow_html=True)
+    st.markdown(_hero_html(), unsafe_allow_html=True)
 
-    if not st.session_state.chat_started:
-        
-        st.session_state.messages.append({"role": "assistant", "content": _WELCOME})
-        st.session_state.chat_started = True
+    # Loop de mensagens
+    avatar = _cacau_avatar()
+    for msg in st.session_state.fm_messages:
+        av = avatar if msg["role"] == "assistant" else ":material/person:"
+        with st.chat_message(msg["role"], avatar=av):
+            st.markdown(msg["content"])
+        # Exibe imagens apenas em mensagens do LLM (skip_images=False) — nunca em erros ou transicoes
+        if msg["role"] == "assistant" and not msg.get("skip_images", True):
+            _show_product_images(_detect_products_in_text(msg["content"]))
 
-    for message in st.session_state.messages:
-        _cacau_av = _get_cacau_avatar()
-        avatar = _cacau_av if message["role"] == "assistant" else ":material/person:"
-        with st.chat_message(message["role"], avatar=avatar):
-            st.markdown(message["content"])
-        if message["role"] == "assistant" and not st.session_state.get("awaiting_quantity"):
-            _show_product_images(_detect_products(message["content"]))
+    # Widget do estado atual
+    state = st.session_state.get("flow_state", "aguardando_intencao")
 
-    _render_pending_quantity_block()
+    if state == "aguardando_quantidade":
+        _render_quantity_widget()
+        return
 
-    if st.session_state.get("awaiting_payment"):
-        _render_payment_block()
+    if state == "aguardando_confirmacao_total":
+        _render_order_summary()
+        return
 
-    if prompt := st.chat_input("Digite sua mensagem para a Cacau...", key="cacau_chat_input"):
-        had_name = bool(st.session_state.lead_name)
-        _extract_lead(prompt)
-        current_name = st.session_state.lead_name
+    if state == "aguardando_autorizacao_dados":
+        _render_lgpd_screen()
+        return
 
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    if state == "gerando_pix":
+        _render_gerando_pix()
+        return
 
-        if had_name and current_name:
-            _maybe_stop_for_purchase(prompt)
+    if state == "aguardando_pagamento_pix":
+        _render_pix_panel()
+        return
 
-        if not had_name and current_name:
-            response = _flavor_prompt(current_name)
-        elif not current_name:
-            response = _name_prompt()
-        elif st.session_state.get("awaiting_quantity"):
-            label = st.session_state.pending_flavor_info.get("label", "")
-            response = f"Perfeito! So falta voce confirmar a quantidade da {label} aqui abaixo \U0001F447"
-        else:
-            with st.spinner("Cacau esta preparando uma sugestao para voce..."):
-                response = _call_groq()
+    if state in ("aguardando_entrega", "pedido_finalizado"):
+        _render_pos_pagamento()
+        return
 
-        with st.chat_message("assistant", avatar=_get_cacau_avatar()):
-            st.markdown(response)
-        if not st.session_state.get("awaiting_quantity"):
-            _show_product_images(_detect_products(response))
+    # Chat input — estados conversacionais
+    placeholder = {
+        "coletando_nome_entrega":     "Digite seu nome para entrega...",
+        "coletando_endereco_entrega": "Rua, número, bairro, cidade...",
+        "coletando_cpf":              "Somente os 11 números do CPF...",
+    }.get(state, "Digite sua mensagem para a Cacau... 🍫")
 
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        st.rerun()
-
-    st.divider()
-    if st.button("Limpar conversa", key="clr_chat"):
-        for key in [
-            "messages", "lead_name", "lead_phone", "lead_email", "lead_endereco",
-            "lead_whatsapp", "lead_cpf", "lead_bairro", "lead_cidade", "lead_uf", "lead_cep",
-            "chat_started", "awaiting_quantity", "awaiting_payment",
-            "pending_flavor", "pending_flavor_info", "order_confirmed", "last_intent",
-            "customer_profile_id", "asaas_customer_id", "db_payment_result", "db_payment_error",
-        ]:
-            st.session_state.pop(key, None)
-        st.rerun()
-
-
-if __name__ == "__main__":
-    render()
+    if prompt := st.chat_input(placeholder, key="cacau_chat_input"):
+        _process_input(prompt)
